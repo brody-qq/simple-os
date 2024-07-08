@@ -1,0 +1,6 @@
+toolchain/build/*
+toolchain/src/*
+build/*
+*.swp
+*.swo
+*.log

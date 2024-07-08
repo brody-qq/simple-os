@@ -1,0 +1,118 @@
+
+#########################
+#### CORE SUBSYSTEMS ####
+#########################
+
+compile kernel in 64-bit
+    compile pre-kernel code as 32 bit
+    setup initial boot page tables
+    transfer to long mode
+    jmp into 64-bit boot code
+    setup kernel mappings & fixed offset v2p mapping
+
+setup debug output
+    https://wiki.osdev.org/Kernel_Debugging#Using_the_serial_port
+    VGA text output
+    later: setup python fstring style formatting for printing
+
+setup initial CPU state
+    CPUID structs (probably not necessary for OS that runs on single, unchanging VM...?)
+    set FPU state
+    set LAPIC state (should this wait until interrupt management initialization???)
+
+setup physical page allocation
+    parse multiboot memory map to find which ranges are usable
+    make physical page allocator
+
+setup kmalloc
+    can initially use a static u8 array in the kernel image until physical page allocation is set up
+    this will allocate from phyiscal pages for kernel code
+    either:
+        - allocate from entire usable physical address space (* this seems simpler)
+        - lazily expand region that is allocated from as needed
+
+setup virtual memory objects and mappings for them
+    write code to re-write page tables to map & unmap memory regions (use fixed offset v2p mapping)
+    write struct to represent memory range in a virtual address space
+        write code to fit one of these ranges into a pre-existing virtual address space
+        write code to map one of these vaddr ranges to phyiscal pages
+        write code to unmap one of these vaddr ranges (clear existing mappings)
+        write code to 'deallocate' one of these ranges from vaddr space
+
+interrupt management:
+    IDT for internal x86 interrupts
+    TODO: figure out what to do for external interrupts:
+        - I can maybe get away with hardcoding external interrupt 'registry', this OS will only require:
+            - keyboard interrupt handler
+            - system timer interrupt handler (should defer to scheduler)
+            - ATA interrupt handler (ATA PIO interrupts can be disabled via the nIEN register, hopefully this eliminates the need for intr handler)
+                - (also the ATA interrupt handler (if required) will not be necessary until filesystem is implemented)
+
+
+
+#########################################
+#### PROCESSES, SCHEDULER & TERMINAL ####
+#########################################
+
+syscall subsystem:
+    ideally this will involve making a header-only library that has wrappers around the system calls
+
+make processes:
+    TODO: choose a executable file format (a.out or ELF, whichever is simpler)
+    requires:
+        - saving & restoring CPU state
+        - tracking of vaddr ranges used by this process
+        - context switching (CPU state changes, cr3 reloads)
+        - loading executable images (subset of ELF?, a.out?)
+        - some concept of program args, stdout, stdin (make stdin & stdout very limited to keep things simple...)
+        - all new processes must be added to scheduler queue
+        - system call to create new processes w/ args & configured stdin & stdout:
+            - make this take program name as args
+            - then parse and search file system for executable
+            - initially, before I implement a FS:
+                - the executable images will be part of the kernel image 
+                - the 'file system' search will be a pre-defined table that maps 'file names' to the executable images
+            - then load executable w/ args parsed from command line string
+        - system call to exit/terminate processes
+        - code to 'crash' process in case of 'error' interrupts (e.g. divide by 0)
+
+    make compiler toolchain to create C programs for this OS
+    maybe make initial implementation that doesn't make hard distinction between userspace and kernelspace to simplify context switching, system calls & interrupt handling
+    initial process will be scheduler, scheduler queue will be be pre-initialized with terminal process
+
+scheduler:
+    requires:
+        - timer based interrupts to initiate scheduler
+        - global queue of processes
+    make a round robin scheduler
+
+terminal:
+    make this a userspace process
+    requires:
+        - read keyboard interrupt keycodes into 'stdin' like buffer
+
+
+
+#####################
+#### FILE SYSTEM ####
+#####################
+
+file system
+    requires:
+        - FAT32 implementation
+        - ATA PIO driver implementation
+    (NOTE: for a simple implementation, tracking file descriptors in processes seems unecessary)
+    - add file system related system calls
+    - add terminal programs for file system manipulations
+    - look into what interrupt handlers may be required for ATA devices
+    - modify 'create_process' system call to search file system for executable images
+
+changing how qemu boots the OS:
+    - make FAT32 disk image with:
+        - partition table
+        - kernel image (INCLUDING GRUB!!)
+        - other relevant files
+    - configure GRUB to boot the kernel from file system on this disk image
+    - configure qemu to boot off of this disk image
+    (some info on making GRUB boot via file system: https://wiki.osdev.org/GRUB#Disk_image_instructions )
+

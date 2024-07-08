@@ -1,0 +1,200 @@
+TERMINOLOGY:
+    paddr:  physical address
+    pspace: physical address space
+    prange: contiguous range of physical addresses
+    vaddr:  virtual address
+    vspace: virtual address space
+    vrange: contiguous range of virtual addresses
+    pmap:   'physical map', identity map of all available physical memory
+    mapping a vrange:   allocating physical pages and writing page table entries to map the vrange to those physical pages
+    unmapping a vrange: clearing the page table entries that map a vrange and de-allocating the phyiscal pages that backed that vrange
+
+RESOURCES:
+    Unix Internals (Uresh Vahalia)
+    Intel 64 Software Developer Manual
+    AMD64 Architecture Programmer's Manual
+    https://wiki.osdev.org/Main_Page
+    SerenityOS ( https://github.com/SerenityOS/serenity )
+    https://www.gnu.org/software/grub/manual/multiboot/multiboot.html
+    https://github.com/openbsd/src/blob/master/sys/sys/exec_elf.h
+    https://www.kernel.org/doc/Documentation/x86/kernel-stacks
+    https://gcc.gnu.org/onlinedocs/gcc/extensions-to-the-c-language-family/how-to-use-inline-assembly-language-in-c-code.html
+    https://www.nongnu.org/ext2-doc/ext2.html
+
+NOTE: 
+    the days are not exact, look to git log for more specific dates if necessary
+    the 'day 1', 'day 2' etc. headings are based on days that I am working on noteworthy changes, NOT calendar days
+        e.g. if the 1st day I work on this is on Monday and the 2nd is on Thursday, those days will be marked as 'day 1' and 'day 2', not 'day 1' and 'day 4'
+        days where I only make small, non-noteworthy changes (like small code cleanups, re-writing some comments, etc.) will not be tracked here as they are irrelevant to the final report
+
+day 1:
+- setup build environment (ubuntu VM)
+- get a 'hello world' example building (https://wiki.osdev.org/Bare_Bones)
+    - building cross compiler & binutils
+    - multiboot & GRUB
+    - qemu & gdb + qemu
+
+day 2:
+- did some research into file systems to see which one I want to implement:
+    - researched FAT32 file system
+    - researched ATA PIO interface & drivers
+
+day 3 & 4:
+- changed build script to build 64-bit kernel image
+- added code to enter 64 bit mode (based on boot code from SerenityOS)
+- added serial debug output
+- added physical page allocator as first step in having proper memory management system
+
+day 5:
+- realized that kernel vspace has not been setup yet...
+- in order to reposition kernel image in vspace, I will have to do the relocations in the kernel ELF image
+- also these relocations will have to be performed anytime kernel image (or any executable image) is relocated, so this is to be avoided
+- based on researching how SerenityOS handles this (Kernel/Prekernel/boot.S & Kernel/Prekernel/init.cpp):
+- simplest way to load kernel image in a different vspace location is to separate the boot code and the kernel code, then make the boot code:
+    - make it so that boot code and kernel code are compiled/linked separately
+    - make it so that GRUB boots into the boot code, but loads the kernel image as a boot module
+    - load the kernel code into vrange
+    - perform the relocations on the kernel code
+    - reload page tables
+    - jump into kernel code
+    - also it should store the known start and end address of the kernel,
+
+day 6:
+- the stuff from day 5 was a bad idea
+- simpler way is to identity map the lowest region of memory, then use > max_physical_addr for virtual mappings
+- this means I can use the kernel image as loaded by GRUB, so I don't need to re-load or mess with the kernel image in anyway
+- also physical to virtual address translations are trivial
+- implemented this, note that after boot.S, there wasn't enough address range mapped to make the entire pmap
+- so I had to first make enough of the pmap to cover enough address space to fit the rest of hte pmap, then I made the rest of the pmap
+- also I used large pages (2MB) for the pmap to keep space smaller. I would have used 1GB pages but not sure how ubiquotous this feature is... maybe I will try to detect it and then use 1GB pages if the CPU supports them in the future
+- so kernel is in booting state with first 32GB of memory identity mapped, now I will need to think about:
+    - how to handle the space above 32GB,
+    - how to handle computers with < 32GB physical memory
+    - cleanup the code I wrote so far (a lot of it was written without much thought while trying to debug the pmap)
+
+day 7 & 8:
+- implement heap allocator to allocate buffers for kernel objects
+- the allocator will allocate a vrange, then map that vrange, that vrange is the returned buffer
+- when you free a buffer, the vrange will be de-allocated and unmapped
+- since only allocated buffers will be mapped, then large gaps of memory between buffers in the heap do not contribute to physical memory usage
+- since unused gaps between buffers are not mapped, and since we have a 64-bit vspace, there is no cost to using a gigantic vrange to contain the allocators buffers
+- implementing this allocator will require:
+    - updating the partially finished page table structures
+    - implementing functions to map & unmap a vrange to physical pages (using the physical page allocator to allocate page tables)
+    - setting aside a vrange (above max_phys_addr) to hold the allocations
+
+day 9 & 10:
+- debugging problems with memory allocator and pmap
+
+day 11:
+- finished memory allocation
+
+day 12 - 15:
+- researched SerenityOS implementation of interrupts & interrupt controllers
+- researched interrupts & descriptors from AMD64 manual
+
+day 16 - 18:
+- implemented GDT, TSS, IDT
+- implemented cpu exception handlers
+- implemented generic interrupt handler
+- plan to start processes next
+
+day 18:
+- plan for implementing first steps of processes:
+    - initially processes will just run kernel image code in kernel space, but with a separate stack and the ability to save & restore process state
+    - will need to implement a yield() and an exit() system call
+    - for initial tests processes will be started by manually adding processes to the scheduler queue in the init code before kicking off the scheduler
+    - system calls will be done via interrupts (since I already have interrupts setup so I can use that existing code)
+    - will add pre-interrupt handler and post-interrupt handler code to switch into and out of kernel vspace on interrupt entry and exit
+    - since I don't have timer interrupts yet, processes will initially be cooperatively scheduled
+    - the initial test will be 2 processes that print a string and then yield() to the other process
+ 
+day 19 - 22:
+- researched GCC inline asm syntax since I ran into a case where my existing knowledge of it wasn't enough
+- implemented basics of processes (kernel process startup, yield & resume)
+- implemented PIC since when I enabled interrupts I was immediately getting interrupt 0x8 from the PIC which was being confused for a double fault exception by my code
+  ( https://wiki.osdev.org/I_Can%27t_Get_Interrupts_Working#I.27m_receiving_a_double_fault_after_enabling_interrupts )
+ 
+day 23 - 24:
+- researched and implemented PIT
+- implemented pre-emptive scheduling for processes
+- cleaned up code (took memory management code out of kernel.cpp)
+
+day 25:
+- implemented ability for processes to block
+- implemented blocking and non-blocking exec sys call
+
+day 26 - 30:
+- implemented ability for processes to have their own vspace
+    - requires processes to track their own page tables
+    - requires process switching code to switch between vspaces
+    - requires updates to memory management (must implement VObject that can map the same pages into 2 vspaces)
+    - requires interupt entry to switch vspace and stack pointer
+ 
+day 31:
+- there is now 1 interrupt stack for all processes, previously each process had its' own interrupt stack
+
+day 32:
+- finished implementing vspace switching for processes:
+    - processes now clean up their own page tables
+    - process switching code now works with switching vspaces
+
+day 33:
+- build script now makes a disk image with MBR partition table, GRUB boot sector, and ext2 filesystem
+- qemu boots the kernel from the disk image
+- next to implement:
+    - PCI polling for IDE drives
+    - ATA PIO driver to read/write drive sectors
+    - ext2 file system implementation
+
+day 34 - 36:
+- research and implement ATA PIO driver
+
+day 37 - 58:
+- research and inplement ext2
+- issues:
+    - 1: read/write via ata pio is slow
+    - 2: these slow reads/writes are CPU bound, which currently blocks other interrupts (specifically timer interrupts) because of how I setup all syscalls to block interrupts
+- above issues solved via using DMA and reading/writing to a buffer cache
+
+day 59:
+- vspace will be split into 3 parts:
+    - kernel
+    - kernel kmalloced objects
+    - userspace
+- syscalls will no longer switch to kernel space, since the kernel and all kernel kmalloced objects are mapped in the current page tables
+- this sets up copying buffers/strings to kernel space, since it will be much easier if all relevant memory ranges are already mapped
+
+day 60:
+- implement syscall for userspace programs to print to console
+- implement syscall to allocate and free memory for user processes
+
+day 61 - ...:
+- load and run user binaries
+
+// STOPPED KEEPING TRACK OF DAYS AT THIS POINT
+
+- added keyboard driver
+- added syscall to poll keyboard events
+
+- added terminal abstraction to kernel
+
+TODO
+- implemented processes that run in usermode
+    - requires that memory allocation and text output are put behind system calls
+    - requires vrange mapping code to be updated to allow usermode pages
+    - requires loading of ELF binaries
+    - requires mechanism to track allocations inside the process (list of vobjects in Process object)
+    - fault interrupt handlers should crash and cleanup the process
+- cleanup ext2 code
+    - code for iterating over inode blocks is duplicated 4 times
+    - no rename() function (can be done efficiently by adding a new directory entry and deleting the old one)
+    - no in-memory buffering of blocks
+    - code loads all inodes into memory, even though only a tiny percent of them are needed
+- cleanup page tables code (lot of duplicated code for the different classes)
+- cleanup memory allocation code
+    - there are 2 paths through VSpace allocations, one for kmalloc and one for VObjects, find a way to merge these
+
+// so there are 2 concepts of allocating virtual memory:
+//  - kmalloc/kfree -> used only for kernel specific memory, allocates & de-allocates phys pages without tracking them explicitly
+//  - vobjs -> used for memory that must be shared between 2 or more vspaces, explicitly tracks the physical pages that are allocated to it
